@@ -11,7 +11,7 @@ import webbrowser
 import torch
 import customtkinter as ctk
 from urllib.parse import quote
-
+from llm_client import OllamaClient
 # ================= НАСТРОЙКИ =================
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL_NAME = "qwen2.5:7b"
@@ -111,7 +111,11 @@ class JarvisApp(ctk.CTk):
         global whisper_model, tts_model, tts_sample_rate
         try:
             print("⏳ Загружаю Whisper...")
-            whisper_model = whisper.load_model("medium")
+            whisper_device = "cuda" if torch.cuda.is_available() else "cpu"
+            whisper_model = whisper.load_model(
+            "small",
+            device=whisper_device,
+            )
             print("✅ Whisper загружен")
 
             print("⏳ Загружаю Silero TTS (локальный голос, ~30 сек)...")
@@ -212,30 +216,57 @@ class JarvisApp(ctk.CTk):
         threading.Thread(target=self.process_audio, daemon=True).start()
 
     def process_audio(self):
-        self.after(0, lambda: self.status_var.set("🔍 Распознаю речь..."))
+        try:
+            self.after(
+                0,
+                lambda: self.status_var.set("🔍 Распознаю речь..."),
+            )
 
-        audio = np.concatenate(self.audio_data, axis=0)
-        wavfile.write("temp_audio.wav", self.sample_rate, audio)
+            audio = np.concatenate(self.audio_data, axis=0)
+            audio = audio.reshape(-1).astype(np.float32) / 32768.0
 
-        result = whisper_model.transcribe("temp_audio.wav", language="ru", fp16=True)
-        text = result["text"].strip()
+            result = whisper_model.transcribe(
+                audio,
+                language="ru",
+                fp16=(whisper_device == "cuda"),
+            )
+            text = result["text"].strip()
 
-        self.after(0, lambda: self.user_text_var.set(text))
+            self.after(0, lambda: self.user_text_var.set(text))
 
-        if not text:
-            self.after(0, lambda: self.status_var.set("⚠️ Не услышал"))
-            return
+            if not text:
+                self.after(
+                    0,
+                    lambda: self.status_var.set("⚠️ Не услышал"),
+                )
+                return
 
-        self.after(0, lambda: self.status_var.set("🧠 Думаю..."))
-        action_data = self.ask_llm(text)
-        result_text = self.execute_action(action_data)
+            self.after(0, lambda: self.status_var.set("🧠 Думаю..."))
 
-        self.after(0, lambda: self.jarvis_text_var.set(result_text))
-        self.after(0, lambda: self.status_var.set("✅ Готов! Зажми кнопку и говори"))
-        
-        # Озвучиваем в фоновом потоке (не блокирует интерфейс)
-        threading.Thread(target=speak_text, args=(result_text,), daemon=True).start()
+            action_data = self.ask_llm(text)
+            result_text = self.execute_action(action_data)
 
+            self.after(0, lambda: self.jarvis_text_var.set(result_text))
+            self.after(
+                0,
+                lambda: self.status_var.set("✅ Готов! Зажми кнопку и говори"),
+            )
+
+            threading.Thread(
+                target=speak_text,
+                args=(result_text,),
+                daemon=True,
+            ).start()
+
+        except Exception as err:
+            print(f"Ошибка обработки запроса: {err}")
+            self.after(
+                0,
+                lambda: self.status_var.set(
+                    "❌ Ошибка обработки. Подробности в консоли."
+                ),
+            )
+    
     def ask_llm(self, user_text):
         system_prompt = """
         Ты - Джарвис, голосовой помощник на русском языке.
