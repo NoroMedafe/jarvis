@@ -1,0 +1,101 @@
+# ================= PYTHON =================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+.Python
+
+# ================= ВИРТУАЛЬНОЕ ОКРУЖЕНИЕ =================
+jarvis_env/
+venv/
+ENV/
+env/
+.venv/
+
+# ================= ВРЕМЕННЫЕ ФАЙЛЫ ПРОЕКТА =================
+# Аудиозаписи и сгенерированные файлы
+temp_audio.wav
+temp_tts.mp3
+*.wav
+*.mp3
+*.ogg
+
+# Кэш моделей и torch hub
+.cache/
+torch_hub_cache/
+*.pth
+*.pt
+
+# ================= IDE И РЕДАКТОРЫ =================
+# VS Code
+.vscode/
+!.vscode/extensions.json
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Vim / Emacs
+*.swp
+*.swo
+*~
+.*.swp
+
+# ================= ОПЕРАЦИОННАЯ СИСТЕМА =================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+
+# ================= ОКРУЖЕНИЕ И СЕКРЕТЫ =================
+.env
+.env.local
+.env.*.local
+*.log
+
+# ================= ИНСТРУМЕНТЫ РАЗРАБОТКИ =================
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Сборка и дистрибуция
+build/
+dist/
+*.egg-info/
+*.egg
+
+# ================= ДОПОЛНИТЕЛЬНО (по желанию) =================
+# Если не хочешь коммитить настройки Ollama
+ollama_models/
+
+# Логи работы Джарвиса
+logs/
+*.log
