@@ -10,6 +10,7 @@ import threading
 import webbrowser
 import torch
 import customtkinter as ctk
+import re
 from urllib.parse import quote
 from llm_client import OllamaClient
 # ================= НАСТРОЙКИ =================
@@ -18,6 +19,7 @@ MODEL_NAME = "qwen2.5:7b"
 
 # Глобальные переменные
 whisper_model = None
+whisper_device = "cpu"
 tts_model = None
 tts_sample_rate = 48000
 tts_lock = threading.Lock() # Блокировка, чтобы фразы не накладывались
@@ -64,6 +66,10 @@ def search_web(query):
     webbrowser.open(f"https://duckduckgo.com/?q={quote(query)}")
     return f"Ищу '{query}' в интернете."
 
+def contains_chinese(text):
+    return bool(
+        re.search(r"[\u3400-\u4DBF\u4E00-\u9FFF]", text)
+    )
 
 def speak_text(text):
     """Локальная, мгновенная озвучка через Silero TTS"""
@@ -74,10 +80,25 @@ def speak_text(text):
         try:
             print(f"🔊 Озвучиваю: {text}")
             # Используем актуальный спикер v4_ru
-            audio = tts_model.apply_tts(text=text, speaker='v4_ru', sample_rate=tts_sample_rate)
+            audio = tts_model.apply_tts(text=text, speaker='baya', sample_rate=tts_sample_rate)
             
-            # Преобразуем тензор PyTorch в numpy массив для sounddevice
-            audio_np = audio.numpy()
+            if isinstance(audio, torch.Tensor):
+                audio_np = audio.detach().cpu().numpy()
+            else:
+                audio_np = np.asarray(audio)
+
+            audio_np = audio_np.squeeze()
+
+            if audio_np.size == 0:
+                raise RuntimeError("Silero вернула пустое аудио")
+            if contains_chinese(audio_np):
+                print("⚠️ Обнаружены китайские иероглифы в ответе модели")
+                audio_np = (
+                    "Не удалось сформировать корректный ответ на русском языке. "
+                    "Попробуй повторить запрос."
+                )
+
+
             
             # Воспроизводим звук
             sd.play(audio_np, tts_sample_rate)
@@ -96,7 +117,7 @@ class JarvisApp(ctk.CTk):
 
         self.is_recording = False
         self.audio_data = []
-        self.sample_rate = 16000
+        self.sample_rate = 24000
         self.stream = None
 
         self.status_var = ctk.StringVar(value="⏳ Загрузка моделей...")
@@ -108,7 +129,7 @@ class JarvisApp(ctk.CTk):
         threading.Thread(target=self.init_models, daemon=True).start()
 
     def init_models(self):
-        global whisper_model, tts_model, tts_sample_rate
+        global whisper_model, whisper_device, tts_model, tts_sample_rate
         try:
             print("⏳ Загружаю Whisper...")
             whisper_device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -271,8 +292,14 @@ class JarvisApp(ctk.CTk):
         system_prompt = """
         Ты - Джарвис, голосовой помощник на русском языке.
         
-        ВАЖНО: Отвечай ТОЛЬКО на русском языке. Никогда не используй китайские иероглифы или другие языки.
-        Отвечай СТРОГО в формате JSON без markdown, без пояснений, без ```json.
+        СТРОГИЕ ПРАВИЛА:
+        - Всегда отвечай на русском языке.
+        - Не используй китайские иероглифы, если пользователь явно не просит
+        написать или перевести китайский текст.
+        - Не добавляй китайские символы к русским словам.
+        - Не выдумывай результаты выполнения команд.
+        - Отвечай кратко и естественно, чтобы ответ было удобно озвучивать.
+        - Для команд возвращай только JSON без Markdown.
         
         Доступные действия:
         1. {"action": "open_app", "app_name": "название"} - открыть приложение.
@@ -280,6 +307,8 @@ class JarvisApp(ctk.CTk):
         2. {"action": "get_weather", "city": "город"} - узнать погоду. Если город не назван, используй "Санкт-Петербург".
         3. {"action": "search_web", "query": "запрос"} - найти в интернете и открыть браузер.
         4. {"action": "answer", "text": "ответ"} - просто ответить голосом.
+
+        Для обычного разговора используй action="answer".
         """
 
         payload = {
@@ -289,7 +318,7 @@ class JarvisApp(ctk.CTk):
                 {"role": "user", "content": user_text}
             ],
             "format": "json",
-            "keep_alive": 0,
+            "keep_alive": "15m",
             "stream": False
         }
 
