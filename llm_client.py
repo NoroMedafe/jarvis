@@ -18,7 +18,7 @@ class OllamaClient:
             "Не выдумывай факты и результаты действий. "
             "Если не знаешь ответа, честно скажи об этом."
         ),
-        keep_alive="30m",
+        keep_alive="5m",
         max_history=12,
         timeout=120,
     ):
@@ -62,7 +62,7 @@ class OllamaClient:
                 "stream": False,
                 "keep_alive": self.keep_alive,
                 "options": {
-                    "temperature": 0.3,
+                    "temperature": 0.2,
                     "num_ctx": 4096,
                     "num_predict": 256,
                 },

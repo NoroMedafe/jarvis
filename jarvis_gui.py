@@ -12,7 +12,7 @@ import torch
 import customtkinter as ctk
 import re
 from urllib.parse import quote
-from llm_client import OllamaClient
+
 # ================= НАСТРОЙКИ =================
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL_NAME = "qwen2.5:7b"
@@ -21,10 +21,9 @@ MODEL_NAME = "qwen2.5:7b"
 whisper_model = None
 whisper_device = "cpu"
 tts_model = None
-tts_sample_rate = 48000
-tts_lock = threading.Lock() # Блокировка, чтобы фразы не накладывались
+tts_sample_rate = 24000  # Фиксируем стабильный дефолт для Silero (24000 или 48000)
+tts_lock = threading.Lock()
 
-# Словарь приложений
 APPS = {
     "браузер": "browser",
     "хром": "browser",
@@ -66,21 +65,33 @@ def search_web(query):
     webbrowser.open(f"https://duckduckgo.com/?q={quote(query)}")
     return f"Ищу '{query}' в интернете."
 
+
 def contains_chinese(text):
-    return bool(
-        re.search(r"[\u3400-\u4DBF\u4E00-\u9FFF]", text)
-    )
+    """Строгая проверка текста на наличие китайских иероглифов"""
+    if not isinstance(text, str):
+        return False
+    return bool(re.search(r"[\u3400-\u4DBF\u4E00-\u9FFF]", text))
+
 
 def speak_text(text):
     """Локальная, мгновенная озвучка через Silero TTS"""
     if not text or tts_model is None:
         return
     
+    # Предохранитель от иероглифов в речи
+    if contains_chinese(text):
+        print("⚠️ В тексте для озвучки обнаружены иероглифы. Заменяем.")
+        text = "Ошибка генерации текста. Повторите запрос."
+
     with tts_lock:
         try:
             print(f"🔊 Озвучиваю: {text}")
-            # Используем актуальный спикер v4_ru
-            audio = tts_model.apply_tts(text=text, speaker='baya', sample_rate=tts_sample_rate)
+            # Явное указание именованных аргументов спасает от сдвига sample_rate
+            audio = tts_model.apply_tts(
+                text=text, 
+                speaker='baya', 
+                sample_rate=tts_sample_rate
+            )
             
             if isinstance(audio, torch.Tensor):
                 audio_np = audio.detach().cpu().numpy()
@@ -91,18 +102,10 @@ def speak_text(text):
 
             if audio_np.size == 0:
                 raise RuntimeError("Silero вернула пустое аудио")
-            if contains_chinese(audio_np):
-                print("⚠️ Обнаружены китайские иероглифы в ответе модели")
-                audio_np = (
-                    "Не удалось сформировать корректный ответ на русском языке. "
-                    "Попробуй повторить запрос."
-                )
 
-
-            
             # Воспроизводим звук
             sd.play(audio_np, tts_sample_rate)
-            sd.wait() # Ждем окончания воспроизведения
+            sd.wait()
         except Exception as e:
             print(f"❌ Ошибка TTS: {e}")
 
@@ -134,20 +137,24 @@ class JarvisApp(ctk.CTk):
             print("⏳ Загружаю Whisper...")
             whisper_device = "cuda" if torch.cuda.is_available() else "cpu"
             whisper_model = whisper.load_model(
-            "small",
-            device=whisper_device,
+                "small",
+                device=whisper_device,
             )
-            print("✅ Whisper загружен")
+            print("✅ Whisper загружен на", whisper_device)
 
-            print("⏳ Загружаю Silero TTS (локальный голос, ~30 сек)...")
-            tts_model, tts_sample_rate = torch.hub.load(
+            print("⏳ Загружаю Silero TTS...")
+            model, sample_rate = torch.hub.load(
                 repo_or_dir='snakers4/silero-models',
                 model='silero_tts',
                 language='ru',
-                speaker='v4_ru', # Исправлено на актуальный спикер из списка
+                speaker='v4_ru',
                 trust_repo=True
             )
-            tts_model.to('cpu') 
+            model.to('cpu')
+            
+            # Безопасно обновляем глобальные переменные
+            globals()['tts_model'] = model
+            globals()['tts_sample_rate'] = 24000  # Жестко фиксируем стабильную частоту
             print("✅ Silero TTS готов")
 
             self.after(0, lambda: self.status_var.set("✅ Готов! Зажми кнопку и говори"))
@@ -238,10 +245,7 @@ class JarvisApp(ctk.CTk):
 
     def process_audio(self):
         try:
-            self.after(
-                0,
-                lambda: self.status_var.set("🔍 Распознаю речь..."),
-            )
+            self.after(0, lambda: self.status_var.set("🔍 Распознаю речь..."))
 
             audio = np.concatenate(self.audio_data, axis=0)
             audio = audio.reshape(-1).astype(np.float32) / 32768.0
@@ -256,10 +260,7 @@ class JarvisApp(ctk.CTk):
             self.after(0, lambda: self.user_text_var.set(text))
 
             if not text:
-                self.after(
-                    0,
-                    lambda: self.status_var.set("⚠️ Не услышал"),
-                )
+                self.after(0, lambda: self.status_var.set("⚠️ Не услышал"))
                 return
 
             self.after(0, lambda: self.status_var.set("🧠 Думаю..."))
@@ -267,11 +268,12 @@ class JarvisApp(ctk.CTk):
             action_data = self.ask_llm(text)
             result_text = self.execute_action(action_data)
 
+            # Если LLM выдала иероглифы, защищаем интерфейс
+            if contains_chinese(result_text):
+                result_text = "Я обдумал запрос, но ответ получился некорректным."
+
             self.after(0, lambda: self.jarvis_text_var.set(result_text))
-            self.after(
-                0,
-                lambda: self.status_var.set("✅ Готов! Зажми кнопку и говори"),
-            )
+            self.after(0, lambda: self.status_var.set("✅ Готов! Зажми кнопку и говори"))
 
             threading.Thread(
                 target=speak_text,
@@ -281,35 +283,22 @@ class JarvisApp(ctk.CTk):
 
         except Exception as err:
             print(f"Ошибка обработки запроса: {err}")
-            self.after(
-                0,
-                lambda: self.status_var.set(
-                    "❌ Ошибка обработки. Подробности в консоли."
-                ),
-            )
-    
-    def ask_llm(self, user_text):
-        system_prompt = """
-        Ты - Джарвис, голосовой помощник на русском языке.
-        
-        СТРОГИЕ ПРАВИЛА:
-        - Всегда отвечай на русском языке.
-        - Не используй китайские иероглифы, если пользователь явно не просит
-        написать или перевести китайский текст.
-        - Не добавляй китайские символы к русским словам.
-        - Не выдумывай результаты выполнения команд.
-        - Отвечай кратко и естественно, чтобы ответ было удобно озвучивать.
-        - Для команд возвращай только JSON без Markdown.
-        
-        Доступные действия:
-        1. {"action": "open_app", "app_name": "название"} - открыть приложение.
-           Список: браузер, хром, дискорд, телеграм, блокнот, калькулятор, проводник, vscode, steam, spotify.
-        2. {"action": "get_weather", "city": "город"} - узнать погоду. Если город не назван, используй "Санкт-Петербург".
-        3. {"action": "search_web", "query": "запрос"} - найти в интернете и открыть браузер.
-        4. {"action": "answer", "text": "ответ"} - просто ответить голосом.
+            self.after(0, lambda: self.status_var.set("❌ Ошибка обработки. Подробности в консоли."))
 
-        Для обычного разговора используй action="answer".
-        """
+    def ask_llm(self, user_text):
+        system_prompt = """Ты — Джарвис, умный голосовой помощник на русском языке.
+
+СТРОГИЕ ПРАВИЛА:
+1. Отвечай ИСКЛЮЧИТЕЛЬНО на русском языке. Использование китайских иероглифов или английских слов строжайше запрещено.
+2. Отвечай кратко, емко и естественно, чтобы ответ было удобно озвучивать голосом.
+3. Возвращай результат СТРОГО в формате JSON без каких-либо Markdown блоков (без ```json).
+
+Доступные действия:
+1. {"action": "open_app", "app_name": "название"} - открыть приложение.
+   Список: браузер, хром, дискорд, телеграм, блокнот, калькулятор, проводник, vscode, steam, spotify.
+2. {"action": "get_weather", "city": "город"} - узнать погоду. Если город не назван, используй "Санкт-Петербург".
+3. {"action": "search_web", "query": "запрос"} - найти в интернете и открыть браузер.
+4. {"action": "answer", "text": "ответ"} - просто ответить голосом."""
 
         payload = {
             "model": MODEL_NAME,
@@ -318,6 +307,10 @@ class JarvisApp(ctk.CTk):
                 {"role": "user", "content": user_text}
             ],
             "format": "json",
+            "options": {
+                "temperature": 0.3,       # Понижаем креативность, чтобы убрать бред и иероглифы
+                "repeat_penalty": 1.15
+            },
             "keep_alive": "15m",
             "stream": False
         }
@@ -326,9 +319,13 @@ class JarvisApp(ctk.CTk):
             response = requests.post(OLLAMA_URL, json=payload, timeout=60)
             response.raise_for_status()
             result = response.json()
-            llm_response = result['message']['content']
+            llm_response = result.get('message', {}).get('content', '')
+            
+            # Очистка от возможных артефактов разметки
             llm_response = llm_response.replace("```json", "").replace("```", "").strip()
-            return json.loads(llm_response)
+            
+            parsed = json.loads(llm_response)
+            return parsed
         except Exception as err:
             print(f"❌ Ошибка LLM: {err}")
             return {"action": "answer", "text": "Прости, я не смог обработать запрос."}
@@ -340,7 +337,7 @@ class JarvisApp(ctk.CTk):
             app_key = action_data.get("app_name", "").lower()
             
             if app_key in ("браузер", "хром", "browser", "chrome"):
-                webbrowser.open("https://google.com")
+                webbrowser.open("[https://google.com](https://google.com)")
                 return "Открываю браузер."
             
             if app_key in APP_PATHS:
@@ -380,10 +377,8 @@ if __name__ == "__main__":
         print("🚀 Запуск Джарвиса...")
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
-        print("🎨 Тема установлена")
-
+        
         app = JarvisApp()
-        print("🖼️ Приложение создано, запускаем цикл...")
         app.mainloop()
     except Exception as err:
         print(f"💥 КРИТИЧЕСКАЯ ОШИБКА: {err}")
